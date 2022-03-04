@@ -23,9 +23,9 @@ project "ImGui"
 
     filter "system:windows"
         systemversion "latest"
-        defines {
+        --[[ defines {
             "_CRT_SECURE_NO_WARNINGS"
-        }
+        } ]]
 
     filter "configurations:Debug"
         runtime "Debug"
