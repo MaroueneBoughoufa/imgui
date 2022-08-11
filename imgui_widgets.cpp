@@ -1,4 +1,4 @@
-// dear imgui, v1.88 WIP
+// dear imgui, v1.89 WIP
 // (widgets code)
 
 /*
@@ -1548,7 +1548,7 @@ void ImGui::ShrinkWidths(ImGuiShrinkWidthItem* items, int count, float width_exc
         width_excess -= width_to_remove_per_item * count_same_width;
     }
 
-    // Round width and redistribute remainder left-to-right (could make it an option of the function?)
+    // Round width and redistribute remainder
     // Ensure that e.g. the right-most tab of a shrunk tab-bar always reaches exactly at the same distance from the right-most edge of the tab bar separator.
     width_excess = 0.0f;
     for (int n = 0; n < count; n++)
@@ -1557,10 +1557,13 @@ void ImGui::ShrinkWidths(ImGuiShrinkWidthItem* items, int count, float width_exc
         width_excess += items[n].Width - width_rounded;
         items[n].Width = width_rounded;
     }
-    if (width_excess > 0.0f)
+    while (width_excess > 0.0f)
         for (int n = 0; n < count; n++)
-            if (items[n].Index < (int)(width_excess + 0.01f))
+            if (items[n].Width + 1.0f <= items[n].InitialWidth)
+            {
                 items[n].Width += 1.0f;
+                width_excess -= 1.0f;
+            }
 }
 
 //-------------------------------------------------------------------------
@@ -2623,7 +2626,6 @@ float ImGui::ScaleRatioFromValueT(ImGuiDataType data_type, TYPE v, TYPE v_min, T
             v_max_fudged = -logarithmic_zero_epsilon;
 
         float result;
-
         if (v_clamped <= v_min_fudged)
             result = 0.0f; // Workaround for values that are in-range but below our fudge
         else if (v_clamped >= v_max_fudged)
@@ -2647,91 +2649,81 @@ float ImGui::ScaleRatioFromValueT(ImGuiDataType data_type, TYPE v, TYPE v_min, T
 
         return flipped ? (1.0f - result) : result;
     }
-
-    // Linear slider
-    return (float)((FLOATTYPE)(SIGNEDTYPE)(v_clamped - v_min) / (FLOATTYPE)(SIGNEDTYPE)(v_max - v_min));
+    else
+    {
+        // Linear slider
+        return (float)((FLOATTYPE)(SIGNEDTYPE)(v_clamped - v_min) / (FLOATTYPE)(SIGNEDTYPE)(v_max - v_min));
+    }
 }
 
 // Convert a parametric position on a slider into a value v in the output space (the logical opposite of ScaleRatioFromValueT)
 template<typename TYPE, typename SIGNEDTYPE, typename FLOATTYPE>
 TYPE ImGui::ScaleValueFromRatioT(ImGuiDataType data_type, float t, TYPE v_min, TYPE v_max, bool is_logarithmic, float logarithmic_zero_epsilon, float zero_deadzone_halfsize)
 {
-    if (v_min == v_max)
+    // We special-case the extents because otherwise our logarithmic fudging can lead to "mathematically correct"
+    // but non-intuitive behaviors like a fully-left slider not actually reaching the minimum value. Also generally simpler.
+    if (t <= 0.0f || v_min == v_max)
         return v_min;
-    const bool is_floating_point = (data_type == ImGuiDataType_Float) || (data_type == ImGuiDataType_Double);
+    if (t >= 1.0f)
+        return v_max;
 
-    TYPE result;
+    TYPE result = (TYPE)0;
     if (is_logarithmic)
     {
-        // We special-case the extents because otherwise our fudging can lead to "mathematically correct" but non-intuitive behaviors like a fully-left slider not actually reaching the minimum value
-        if (t <= 0.0f)
-            result = v_min;
-        else if (t >= 1.0f)
-            result = v_max;
-        else
+        // Fudge min/max to avoid getting silly results close to zero
+        FLOATTYPE v_min_fudged = (ImAbs((FLOATTYPE)v_min) < logarithmic_zero_epsilon) ? ((v_min < 0.0f) ? -logarithmic_zero_epsilon : logarithmic_zero_epsilon) : (FLOATTYPE)v_min;
+        FLOATTYPE v_max_fudged = (ImAbs((FLOATTYPE)v_max) < logarithmic_zero_epsilon) ? ((v_max < 0.0f) ? -logarithmic_zero_epsilon : logarithmic_zero_epsilon) : (FLOATTYPE)v_max;
+
+        const bool flipped = v_max < v_min; // Check if range is "backwards"
+        if (flipped)
+            ImSwap(v_min_fudged, v_max_fudged);
+
+        // Awkward special case - we need ranges of the form (-100 .. 0) to convert to (-100 .. -epsilon), not (-100 .. epsilon)
+        if ((v_max == 0.0f) && (v_min < 0.0f))
+            v_max_fudged = -logarithmic_zero_epsilon;
+
+        float t_with_flip = flipped ? (1.0f - t) : t; // t, but flipped if necessary to account for us flipping the range
+
+        if ((v_min * v_max) < 0.0f) // Range crosses zero, so we have to do this in two parts
         {
-            bool flipped = v_max < v_min; // Check if range is "backwards"
-
-            // Fudge min/max to avoid getting silly results close to zero
-            FLOATTYPE v_min_fudged = (ImAbs((FLOATTYPE)v_min) < logarithmic_zero_epsilon) ? ((v_min < 0.0f) ? -logarithmic_zero_epsilon : logarithmic_zero_epsilon) : (FLOATTYPE)v_min;
-            FLOATTYPE v_max_fudged = (ImAbs((FLOATTYPE)v_max) < logarithmic_zero_epsilon) ? ((v_max < 0.0f) ? -logarithmic_zero_epsilon : logarithmic_zero_epsilon) : (FLOATTYPE)v_max;
-
-            if (flipped)
-                ImSwap(v_min_fudged, v_max_fudged);
-
-            // Awkward special case - we need ranges of the form (-100 .. 0) to convert to (-100 .. -epsilon), not (-100 .. epsilon)
-            if ((v_max == 0.0f) && (v_min < 0.0f))
-                v_max_fudged = -logarithmic_zero_epsilon;
-
-            float t_with_flip = flipped ? (1.0f - t) : t; // t, but flipped if necessary to account for us flipping the range
-
-            if ((v_min * v_max) < 0.0f) // Range crosses zero, so we have to do this in two parts
-            {
-                float zero_point_center = (-(float)ImMin(v_min, v_max)) / ImAbs((float)v_max - (float)v_min); // The zero point in parametric space
-                float zero_point_snap_L = zero_point_center - zero_deadzone_halfsize;
-                float zero_point_snap_R = zero_point_center + zero_deadzone_halfsize;
-                if (t_with_flip >= zero_point_snap_L && t_with_flip <= zero_point_snap_R)
-                    result = (TYPE)0.0f; // Special case to make getting exactly zero possible (the epsilon prevents it otherwise)
-                else if (t_with_flip < zero_point_center)
-                    result = (TYPE)-(logarithmic_zero_epsilon * ImPow(-v_min_fudged / logarithmic_zero_epsilon, (FLOATTYPE)(1.0f - (t_with_flip / zero_point_snap_L))));
-                else
-                    result = (TYPE)(logarithmic_zero_epsilon * ImPow(v_max_fudged / logarithmic_zero_epsilon, (FLOATTYPE)((t_with_flip - zero_point_snap_R) / (1.0f - zero_point_snap_R))));
-            }
-            else if ((v_min < 0.0f) || (v_max < 0.0f)) // Entirely negative slider
-                result = (TYPE)-(-v_max_fudged * ImPow(-v_min_fudged / -v_max_fudged, (FLOATTYPE)(1.0f - t_with_flip)));
+            float zero_point_center = (-(float)ImMin(v_min, v_max)) / ImAbs((float)v_max - (float)v_min); // The zero point in parametric space
+            float zero_point_snap_L = zero_point_center - zero_deadzone_halfsize;
+            float zero_point_snap_R = zero_point_center + zero_deadzone_halfsize;
+            if (t_with_flip >= zero_point_snap_L && t_with_flip <= zero_point_snap_R)
+                result = (TYPE)0.0f; // Special case to make getting exactly zero possible (the epsilon prevents it otherwise)
+            else if (t_with_flip < zero_point_center)
+                result = (TYPE)-(logarithmic_zero_epsilon * ImPow(-v_min_fudged / logarithmic_zero_epsilon, (FLOATTYPE)(1.0f - (t_with_flip / zero_point_snap_L))));
             else
-                result = (TYPE)(v_min_fudged * ImPow(v_max_fudged / v_min_fudged, (FLOATTYPE)t_with_flip));
+                result = (TYPE)(logarithmic_zero_epsilon * ImPow(v_max_fudged / logarithmic_zero_epsilon, (FLOATTYPE)((t_with_flip - zero_point_snap_R) / (1.0f - zero_point_snap_R))));
         }
+        else if ((v_min < 0.0f) || (v_max < 0.0f)) // Entirely negative slider
+            result = (TYPE)-(-v_max_fudged * ImPow(-v_min_fudged / -v_max_fudged, (FLOATTYPE)(1.0f - t_with_flip)));
+        else
+            result = (TYPE)(v_min_fudged * ImPow(v_max_fudged / v_min_fudged, (FLOATTYPE)t_with_flip));
     }
     else
     {
         // Linear slider
+        const bool is_floating_point = (data_type == ImGuiDataType_Float) || (data_type == ImGuiDataType_Double);
         if (is_floating_point)
         {
             result = ImLerp(v_min, v_max, t);
         }
-        else
+        else if (t < 1.0)
         {
             // - For integer values we want the clicking position to match the grab box so we round above
             //   This code is carefully tuned to work with large values (e.g. high ranges of U64) while preserving this property..
             // - Not doing a *1.0 multiply at the end of a range as it tends to be lossy. While absolute aiming at a large s64/u64
             //   range is going to be imprecise anyway, with this check we at least make the edge values matches expected limits.
-            if (t < 1.0)
-            {
-                FLOATTYPE v_new_off_f = (SIGNEDTYPE)(v_max - v_min) * t;
-                result = (TYPE)((SIGNEDTYPE)v_min + (SIGNEDTYPE)(v_new_off_f + (FLOATTYPE)(v_min > v_max ? -0.5 : 0.5)));
-            }
-            else
-            {
-                result = v_max;
-            }
+            FLOATTYPE v_new_off_f = (SIGNEDTYPE)(v_max - v_min) * t;
+            result = (TYPE)((SIGNEDTYPE)v_min + (SIGNEDTYPE)(v_new_off_f + (FLOATTYPE)(v_min > v_max ? -0.5 : 0.5)));
         }
     }
 
     return result;
 }
 
-// FIXME: Move more of the code into SliderBehavior()
+// FIXME: Try to move more of the code into shared SliderBehavior()
 template<typename TYPE, typename SIGNEDTYPE, typename FLOATTYPE>
 bool ImGui::SliderBehaviorT(const ImRect& bb, ImGuiID id, ImGuiDataType data_type, TYPE* v, const TYPE v_min, const TYPE v_max, const char* format, ImGuiSliderFlags flags, ImRect* out_grab_bb)
 {
@@ -2741,13 +2733,14 @@ bool ImGui::SliderBehaviorT(const ImRect& bb, ImGuiID id, ImGuiDataType data_typ
     const ImGuiAxis axis = (flags & ImGuiSliderFlags_Vertical) ? ImGuiAxis_Y : ImGuiAxis_X;
     const bool is_logarithmic = (flags & ImGuiSliderFlags_Logarithmic) != 0;
     const bool is_floating_point = (data_type == ImGuiDataType_Float) || (data_type == ImGuiDataType_Double);
+    const SIGNEDTYPE v_range = (v_min < v_max ? v_max - v_min : v_min - v_max);
 
-    const float grab_padding = 2.0f;
+    // Calculate bounds
+    const float grab_padding = 2.0f; // FIXME: Should be part of style.
     const float slider_sz = (bb.Max[axis] - bb.Min[axis]) - grab_padding * 2.0f;
     float grab_sz = style.GrabMinSize;
-    SIGNEDTYPE v_range = (v_min < v_max ? v_max - v_min : v_min - v_max);
-    if (!is_floating_point && v_range >= 0)                                             // v_range < 0 may happen on integer overflows
-        grab_sz = ImMax((float)(slider_sz / (v_range + 1)), style.GrabMinSize);  // For integer sliders: if possible have the grab size represent 1 unit
+    if (!is_floating_point && v_range >= 0)                                     // v_range < 0 may happen on integer overflows
+        grab_sz = ImMax((float)(slider_sz / (v_range + 1)), style.GrabMinSize); // For integer sliders: if possible have the grab size represent 1 unit
     grab_sz = ImMin(grab_sz, slider_sz);
     const float slider_usable_sz = slider_sz - grab_sz;
     const float slider_usable_pos_min = bb.Min[axis] + grab_padding + grab_sz * 0.5f;
@@ -2778,7 +2771,17 @@ bool ImGui::SliderBehaviorT(const ImRect& bb, ImGuiID id, ImGuiDataType data_typ
             else
             {
                 const float mouse_abs_pos = g.IO.MousePos[axis];
-                clicked_t = (slider_usable_sz > 0.0f) ? ImClamp((mouse_abs_pos - slider_usable_pos_min) / slider_usable_sz, 0.0f, 1.0f) : 0.0f;
+                if (g.ActiveIdIsJustActivated)
+                {
+                    float grab_t = ScaleRatioFromValueT<TYPE, SIGNEDTYPE, FLOATTYPE>(data_type, *v, v_min, v_max, is_logarithmic, logarithmic_zero_epsilon, zero_deadzone_halfsize);
+                    if (axis == ImGuiAxis_Y)
+                        grab_t = 1.0f - grab_t;
+                    const float grab_pos = ImLerp(slider_usable_pos_min, slider_usable_pos_max, grab_t);
+                    const bool clicked_around_grab = (mouse_abs_pos >= grab_pos - grab_sz * 0.5f - 1.0f) && (mouse_abs_pos <= grab_pos + grab_sz * 0.5f + 1.0f); // No harm being extra generous here.
+                    g.SliderGrabClickOffset = (clicked_around_grab && is_floating_point) ? mouse_abs_pos - grab_pos : 0.0f;
+                }
+                if (slider_usable_sz > 0.0f)
+                    clicked_t = ImSaturate((mouse_abs_pos - g.SliderGrabClickOffset - slider_usable_pos_min) / slider_usable_sz);
                 if (axis == ImGuiAxis_Y)
                     clicked_t = 1.0f - clicked_t;
                 set_new_value = true;
@@ -3600,7 +3603,7 @@ bool ImGui::InputTextMultiline(const char* label, char* buf, size_t buf_size, co
 
 bool ImGui::InputTextWithHint(const char* label, const char* hint, char* buf, size_t buf_size, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* user_data)
 {
-    IM_ASSERT(!(flags & ImGuiInputTextFlags_Multiline)); // call InputTextMultiline()
+    IM_ASSERT(!(flags & ImGuiInputTextFlags_Multiline)); // call InputTextMultiline() or  InputTextEx() manually if you need multi-line + hint.
     return InputTextEx(label, hint, buf, (int)buf_size, ImVec2(0, 0), flags, callback, user_data);
 }
 
@@ -4176,7 +4179,7 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
     const bool render_cursor = (g.ActiveId == id) || (state && user_scroll_active);
     bool render_selection = state && (state->HasSelection() || select_all) && (RENDER_SELECTION_WHEN_INACTIVE || render_cursor);
     bool value_changed = false;
-    bool enter_pressed = false;
+    bool validated = false;
 
     // When read-only we always use the live data passed to the function
     // FIXME-OPT: Because our selection/cursor code currently needs the wide text we need to convert it when active, which is not ideal :(
@@ -4343,9 +4346,9 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         const bool is_redo  = ((is_shortcut_key && IsKeyPressed(ImGuiKey_Y)) || (is_osx_shift_shortcut && IsKeyPressed(ImGuiKey_Z))) && !is_readonly && is_undoable;
 
         // We allow validate/cancel with Nav source (gamepad) to makes it easier to undo an accidental NavInput press with no keyboard wired, but otherwise it isn't very useful.
-        const bool is_validate_enter = IsKeyPressed(ImGuiKey_Enter) || IsKeyPressed(ImGuiKey_KeypadEnter);
+        const bool is_enter_pressed = IsKeyPressed(ImGuiKey_Enter) || IsKeyPressed(ImGuiKey_KeypadEnter);
         const bool is_validate_nav = (IsNavInputTest(ImGuiNavInput_Activate, ImGuiNavReadMode_Pressed) && !IsKeyPressed(ImGuiKey_Space)) || IsNavInputTest(ImGuiNavInput_Input, ImGuiNavReadMode_Pressed);
-        const bool is_cancel   = IsKeyPressed(ImGuiKey_Escape) || IsNavInputTest(ImGuiNavInput_Cancel, ImGuiNavReadMode_Pressed);
+        const bool is_cancel = IsKeyPressed(ImGuiKey_Escape) || IsNavInputTest(ImGuiNavInput_Cancel, ImGuiNavReadMode_Pressed);
 
         if (IsKeyPressed(ImGuiKey_LeftArrow))                        { state->OnKeyPressed((is_startend_key_down ? STB_TEXTEDIT_K_LINESTART : is_wordmove_key_down ? STB_TEXTEDIT_K_WORDLEFT : STB_TEXTEDIT_K_LEFT) | k_mask); }
         else if (IsKeyPressed(ImGuiKey_RightArrow))                  { state->OnKeyPressed((is_startend_key_down ? STB_TEXTEDIT_K_LINEEND : is_wordmove_key_down ? STB_TEXTEDIT_K_WORDRIGHT : STB_TEXTEDIT_K_RIGHT) | k_mask); }
@@ -4367,12 +4370,17 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
             }
             state->OnKeyPressed(STB_TEXTEDIT_K_BACKSPACE | k_mask);
         }
-        else if (is_validate_enter)
+        else if (is_enter_pressed)
         {
+            // Determine if we turn Enter into a \n character
             bool ctrl_enter_for_new_line = (flags & ImGuiInputTextFlags_CtrlEnterForNewLine) != 0;
             if (!is_multiline || (ctrl_enter_for_new_line && !io.KeyCtrl) || (!ctrl_enter_for_new_line && io.KeyCtrl))
             {
-                enter_pressed = clear_active_id = true;
+                validated = true;
+                if (io.ConfigInputTextEnterKeepActive && !is_multiline)
+                    state->SelectAll(); // No need to scroll
+                else
+                    clear_active_id = true;
             }
             else if (!is_readonly)
             {
@@ -4383,8 +4391,8 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         }
         else if (is_validate_nav)
         {
-            IM_ASSERT(!is_validate_enter);
-            enter_pressed = clear_active_id = true;
+            IM_ASSERT(!is_enter_pressed);
+            validated = clear_active_id = true;
         }
         else if (is_cancel)
         {
@@ -4488,7 +4496,7 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         // When using 'ImGuiInputTextFlags_EnterReturnsTrue' as a special case we reapply the live buffer back to the input buffer before clearing ActiveId, even though strictly speaking it wasn't modified on this frame.
         // If we didn't do that, code like InputInt() with ImGuiInputTextFlags_EnterReturnsTrue would fail.
         // This also allows the user to use InputText() with ImGuiInputTextFlags_EnterReturnsTrue without maintaining any user-side storage (please note that if you use this property along ImGuiInputTextFlags_CallbackResize you can end up with your temporary string object unnecessarily allocating once a frame, either store your string data, either if you don't then don't use ImGuiInputTextFlags_CallbackResize).
-        const bool apply_edit_back_to_user_buffer = !cancel_edit || (enter_pressed && (flags & ImGuiInputTextFlags_EnterReturnsTrue) != 0);
+        const bool apply_edit_back_to_user_buffer = !cancel_edit || (validated && (flags & ImGuiInputTextFlags_EnterReturnsTrue) != 0);
         if (apply_edit_back_to_user_buffer)
         {
             // Apply new value immediately - copy modified buffer back
@@ -4865,14 +4873,14 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
 
     IMGUI_TEST_ENGINE_ITEM_INFO(id, label, g.LastItemData.StatusFlags);
     if ((flags & ImGuiInputTextFlags_EnterReturnsTrue) != 0)
-        return enter_pressed;
+        return validated;
     else
         return value_changed;
 }
 
 void ImGui::DebugNodeInputTextState(ImGuiInputTextState* state)
 {
-#ifndef IMGUI_DISABLE_METRICS_WINDOW
+#ifndef IMGUI_DISABLE_DEBUG_TOOLS
     ImGuiContext& g = *GImGui;
     ImStb::STB_TexteditState* stb_state = &state->Stb;
     ImStb::StbUndoState* undo_state = &stb_state->undostate;
@@ -5901,7 +5909,14 @@ bool ImGui::TreeNodeExV(const void* ptr_id, ImGuiTreeNodeFlags flags, const char
     return TreeNodeBehavior(window->GetID(ptr_id), flags, label, label_end);
 }
 
-bool ImGui::TreeNodeBehaviorIsOpen(ImGuiID id, ImGuiTreeNodeFlags flags)
+void ImGui::TreeNodeSetOpen(ImGuiID id, bool open)
+{
+    ImGuiContext& g = *GImGui;
+    ImGuiStorage* storage = g.CurrentWindow->DC.StateStorage;
+    storage->SetInt(id, open ? 1 : 0);
+}
+
+bool ImGui::TreeNodeUpdateNextOpen(ImGuiID id, ImGuiTreeNodeFlags flags)
 {
     if (flags & ImGuiTreeNodeFlags_Leaf)
         return true;
@@ -5917,7 +5932,7 @@ bool ImGui::TreeNodeBehaviorIsOpen(ImGuiID id, ImGuiTreeNodeFlags flags)
         if (g.NextItemData.OpenCond & ImGuiCond_Always)
         {
             is_open = g.NextItemData.OpenVal;
-            storage->SetInt(id, is_open);
+            TreeNodeSetOpen(id, is_open);
         }
         else
         {
@@ -5926,7 +5941,7 @@ bool ImGui::TreeNodeBehaviorIsOpen(ImGuiID id, ImGuiTreeNodeFlags flags)
             if (stored_value == -1)
             {
                 is_open = g.NextItemData.OpenVal;
-                storage->SetInt(id, is_open);
+                TreeNodeSetOpen(id, is_open);
             }
             else
             {
@@ -5992,7 +6007,7 @@ bool ImGui::TreeNodeBehavior(ImGuiID id, ImGuiTreeNodeFlags flags, const char* l
     // For this purpose we essentially compare if g.NavIdIsAlive went from 0 to 1 between TreeNode() and TreePop().
     // This is currently only support 32 level deep and we are fine with (1 << Depth) overflowing into a zero.
     const bool is_leaf = (flags & ImGuiTreeNodeFlags_Leaf) != 0;
-    bool is_open = TreeNodeBehaviorIsOpen(id, flags);
+    bool is_open = TreeNodeUpdateNextOpen(id, flags);
     if (is_open && !g.NavIdIsAlive && (flags & ImGuiTreeNodeFlags_NavLeftJumpsBackHere) && !(flags & ImGuiTreeNodeFlags_NoTreePushOnOpen))
         window->DC.TreeJumpToParentOnPopMask |= (1 << window->DC.TreeDepth);
 
@@ -7569,8 +7584,8 @@ static void ImGui::TabBarLayout(ImGuiTabBar* tab_bar)
         // Additionally, when using TabBarAddTab() to manipulate tab bar order we occasionally insert new tabs that don't have a width yet,
         // and we cannot wait for the next BeginTabItem() call. We cannot compute this width within TabBarAddTab() because font size depends on the active window.
         const char* tab_name = tab_bar->GetTabName(tab);
-        const bool has_close_button = (tab->Flags & ImGuiTabItemFlags_NoCloseButton) == 0;
-        tab->ContentWidth = TabItemCalcSize(tab_name, has_close_button).x;
+        const bool has_close_button = (tab->Flags & ImGuiTabItemFlags_NoCloseButton) ? false : true;
+        tab->ContentWidth = (tab->RequestedWidth > 0.0f) ? tab->RequestedWidth : TabItemCalcSize(tab_name, has_close_button).x;
 
         int section_n = TabItemGetSectionIdx(tab);
         ImGuiTabBarSection* section = &sections[section_n];
@@ -7579,9 +7594,9 @@ static void ImGui::TabBarLayout(ImGuiTabBar* tab_bar)
 
         // Store data so we can build an array sorted by width if we need to shrink tabs down
         IM_MSVC_WARNING_SUPPRESS(6385);
-        int shrink_buffer_index = shrink_buffer_indexes[section_n]++;
-        g.ShrinkWidthBuffer[shrink_buffer_index].Index = tab_n;
-        g.ShrinkWidthBuffer[shrink_buffer_index].Width = tab->ContentWidth;
+        ImGuiShrinkWidthItem* shrink_width_item = &g.ShrinkWidthBuffer[shrink_buffer_indexes[section_n]++];
+        shrink_width_item->Index = tab_n;
+        shrink_width_item->Width = shrink_width_item->InitialWidth = tab->ContentWidth;
 
         IM_ASSERT(tab->ContentWidth > 0.0f);
         tab->Width = tab->ContentWidth;
@@ -8092,10 +8107,13 @@ bool    ImGui::TabItemButton(const char* label, ImGuiTabItemFlags flags)
 bool    ImGui::TabItemEx(ImGuiTabBar* tab_bar, const char* label, bool* p_open, ImGuiTabItemFlags flags, ImGuiWindow* docked_window)
 {
     // Layout whole tab bar if not already done
-    if (tab_bar->WantLayout)
-        TabBarLayout(tab_bar);
-
     ImGuiContext& g = *GImGui;
+    if (tab_bar->WantLayout)
+    {
+        ImGuiNextItemData backup_next_item_data = g.NextItemData;
+        TabBarLayout(tab_bar);
+        g.NextItemData = backup_next_item_data;
+    }
     ImGuiWindow* window = g.CurrentWindow;
     if (window->SkipItems)
         return false;
@@ -8121,9 +8139,6 @@ bool    ImGui::TabItemEx(ImGuiTabBar* tab_bar, const char* label, bool* p_open, 
     else if (p_open == NULL)
         flags |= ImGuiTabItemFlags_NoCloseButton;
 
-    // Calculate tab contents size
-    ImVec2 size = TabItemCalcSize(label, p_open != NULL);
-
     // Acquire tab data
     ImGuiTabItem* tab = TabBarFindTabByID(tab_bar, id);
     bool tab_is_new = false;
@@ -8132,11 +8147,17 @@ bool    ImGui::TabItemEx(ImGuiTabBar* tab_bar, const char* label, bool* p_open, 
         tab_bar->Tabs.push_back(ImGuiTabItem());
         tab = &tab_bar->Tabs.back();
         tab->ID = id;
-        tab->Width = size.x;
-        tab_bar->TabsAddedNew = true;
-        tab_is_new = true;
+        tab_bar->TabsAddedNew = tab_is_new = true;
     }
     tab_bar->LastTabItemIdx = (ImS16)tab_bar->Tabs.index_from_ptr(tab);
+
+    // Calculate tab contents size
+    ImVec2 size = TabItemCalcSize(label, p_open != NULL);
+    tab->RequestedWidth = -1.0f;
+    if (g.NextItemData.Flags & ImGuiNextItemDataFlags_HasWidth)
+        size.x = tab->RequestedWidth = g.NextItemData.Width;
+    if (tab_is_new)
+        tab->Width = size.x;
     tab->ContentWidth = size.x;
     tab->BeginOrder = tab_bar->TabsActiveCount++;
 
@@ -8163,13 +8184,14 @@ bool    ImGui::TabItemEx(ImGuiTabBar* tab_bar, const char* label, bool* p_open, 
     }
 
     // Update selected tab
-    if (tab_appearing && (tab_bar->Flags & ImGuiTabBarFlags_AutoSelectNewTabs) && tab_bar->NextSelectedTabId == 0)
-        if (!tab_bar_appearing || tab_bar->SelectedTabId == 0)
-            if (!is_tab_button)
+    if (!is_tab_button)
+    {
+        if (tab_appearing && (tab_bar->Flags & ImGuiTabBarFlags_AutoSelectNewTabs) && tab_bar->NextSelectedTabId == 0)
+            if (!tab_bar_appearing || tab_bar->SelectedTabId == 0)
                 tab_bar->NextSelectedTabId = id;  // New tabs gets activated
-    if ((flags & ImGuiTabItemFlags_SetSelected) && (tab_bar->SelectedTabId != id)) // SetSelected can only be passed on explicit tab bar
-        if (!is_tab_button)
+        if ((flags & ImGuiTabItemFlags_SetSelected) && (tab_bar->SelectedTabId != id)) // _SetSelected can only be passed on explicit tab bar
             tab_bar->NextSelectedTabId = id;
+    }
 
     // Lock visibility
     // (Note: tab_contents_visible != tab_selected... because CTRL+TAB operations may preview some tabs without selecting them!)
