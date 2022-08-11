@@ -4,8 +4,8 @@ project "ImGui"
     cppdialect "C++17"
     staticruntime "on"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("%{wks.location}/bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("%{wks.location}/bin-int/" .. outputdir .. "/%{prj.name}")
 
     files {
         "imconfig.h",
@@ -34,3 +34,8 @@ project "ImGui"
     filter "configurations:Release"
         runtime "Release"
         optimize "on"
+
+    filter "configurations:Dist"
+        runtime "Release"
+        optimize "on"
+        symbols "off"
